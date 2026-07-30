@@ -25,9 +25,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 嗷呜模式统一基类 v6 - 全面防御版
+ * 嗷呜模式统一基类 v8 - 终极防御版
  * 
- * 核心修复：所有方法永不返回空URL给TVBox，所有异常内部捕获
+ * 核心修复：
+ * 1. 所有URL字段永不为空字符串（防止TVBox直接请求空URL导致崩溃）
+ * 2. 所有Vod对象的pic字段有默认占位图
+ * 3. playerContent返回的url永不为空
+ * 4. 所有异常内部捕获，永不抛给TVBox
+ * 5. 强制日志输出（Log.w级别，确保可见）
  */
 public abstract class AowuSpider extends Spider {
 
@@ -41,20 +46,22 @@ public abstract class AowuSpider extends Spider {
 
     // 占位URL，用于避免返回空字符串给TVBox
     private static final String PLACEHOLDER_URL = "http://127.0.0.1:9978/empty";
+    private static final String PLACEHOLDER_PIC = "http://127.0.0.1:9978/empty.jpg";
 
     @Override
     public void init(Context context, String extend) throws Exception {
         super.init(context, extend);
+        android.util.Log.w("AowuSpider", "=== init() called, extend=" + extend);
         try {
             parseExt(extend);
+            android.util.Log.w("AowuSpider", "=== init() success, siteUrl=" + siteUrl + ", backupSites=" + backupSites);
         } catch (Exception e) {
-            android.util.Log.e("AowuSpider", "parseExt failed: " + e.getMessage() + ", extend=" + extend);
-            // Fallback: treat extend as plain site URL
+            android.util.Log.e("AowuSpider", "=== init() parseExt failed: " + e.getMessage() + ", extend=" + extend);
             if (extend != null && extend.startsWith("http")) {
                 siteUrl = extend;
                 backupSites = new ArrayList<>();
                 backupSites.add(siteUrl);
-                android.util.Log.d("AowuSpider", "Fallback to plain URL: " + siteUrl);
+                android.util.Log.w("AowuSpider", "=== init() fallback to plain URL: " + siteUrl);
             } else {
                 siteUrl = "";
                 backupSites = new ArrayList<>();
@@ -62,9 +69,6 @@ public abstract class AowuSpider extends Spider {
         }
     }
 
-    /**
-     * 解析 ext 配置（4 种模式）
-     */
     protected void parseExt(String extend) throws Exception {
         if (TextUtils.isEmpty(extend)) {
             siteUrl = "";
@@ -84,7 +88,7 @@ public abstract class AowuSpider extends Spider {
             try {
                 String remote = AowuHttp.get().get(jsonStr, null);
                 siteConfig = new JSONObject(remote);
-                android.util.Log.d("AowuSpider", "Remote config loaded: " + jsonStr);
+                android.util.Log.w("AowuSpider", "Remote config loaded: " + jsonStr);
             } catch (Exception e) {
                 android.util.Log.w("AowuSpider", "Remote config failed, fallback: " + jsonStr);
                 siteConfig = new JSONObject();
@@ -132,7 +136,6 @@ public abstract class AowuSpider extends Spider {
         }
     }
 
-    /** 获取当前可用域名（永不返回 null） */
     protected String getActiveSite() {
         if (backupSites != null && !backupSites.isEmpty()) {
             String site = backupSites.get(0);
@@ -142,12 +145,10 @@ public abstract class AowuSpider extends Spider {
         return "";
     }
 
-    /** 检查 site 是否已初始化 */
     protected boolean isSiteReady() {
         return !TextUtils.isEmpty(getActiveSite());
     }
 
-    /** URL 补全 */
     protected String abs(String url) {
         return fixUrl(url);
     }
@@ -162,15 +163,26 @@ public abstract class AowuSpider extends Spider {
         return base + (url.startsWith("/") ? url : "/" + url);
     }
 
-    /** 提取 ID */
+    /** 安全的URL：如果为空则返回占位URL */
+    protected String safeUrl(String url) {
+        if (TextUtils.isEmpty(url)) return PLACEHOLDER_URL;
+        if (url.startsWith("http://") || url.startsWith("https://")) return url;
+        return PLACEHOLDER_URL;
+    }
+
+    /** 安全的图片URL：如果为空则返回占位图 */
+    protected String safePic(String url) {
+        if (TextUtils.isEmpty(url)) return PLACEHOLDER_PIC;
+        if (url.startsWith("http://") || url.startsWith("https://")) return url;
+        return PLACEHOLDER_PIC;
+    }
+
     protected String extractId(String url) {
         if (TextUtils.isEmpty(url)) return "";
         Matcher m = ID_PATTERN.matcher(url);
         if (m.find()) return m.group(1);
         return "";
     }
-
-    // ===== HTTP 请求（带 URL 合法性校验）=====
 
     protected String fetch(String path) throws Exception {
         String url = abs(path);
@@ -196,13 +208,11 @@ public abstract class AowuSpider extends Spider {
         return AowuHttp.get().post(url, params, null);
     }
 
-    // ===== 本地代理委托给 AowuProxy =====
-
     public String proxyLocal(Map<String, String> params) throws Exception {
         return AowuProxy.handle(params);
     }
 
-    // ===== 通用业务模板（全面异常捕获）=====
+    // ===== 业务方法（全部加 throws Exception + 内部 try-catch）=====
 
     @Override
     public String homeContent(boolean filter) throws Exception {
@@ -224,6 +234,7 @@ public abstract class AowuSpider extends Spider {
 
     @Override
     public String homeVideoContent() throws Exception {
+        android.util.Log.w("AowuSpider", "homeVideoContent() called, siteReady=" + isSiteReady());
         try {
             if (!isSiteReady()) {
                 android.util.Log.e("AowuSpider", "homeVideoContent: site not ready");
@@ -238,6 +249,7 @@ public abstract class AowuSpider extends Spider {
                 Vod vod = parseVodFromElement(item, idSet);
                 if (vod != null) list.add(vod);
             }
+            android.util.Log.w("AowuSpider", "homeVideoContent: returned " + list.size() + " vods");
             return Result.string(list);
         } catch (Exception e) {
             android.util.Log.e("AowuSpider", "homeVideoContent error: " + e.getMessage());
@@ -272,7 +284,8 @@ public abstract class AowuSpider extends Spider {
             Vod vod = new Vod();
             vod.setVodId(id);
             vod.setVodName(title);
-            vod.setVodPic(abs(pic));
+            // 关键修复：pic永不为空
+            vod.setVodPic(safePic(abs(pic)));
             vod.setVodRemarks(status);
             return vod;
         } catch (Exception e) {
@@ -283,6 +296,7 @@ public abstract class AowuSpider extends Spider {
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+        android.util.Log.w("AowuSpider", "categoryContent() called, tid=" + tid);
         try {
             if (!isSiteReady()) {
                 android.util.Log.e("AowuSpider", "categoryContent: site not ready");
@@ -309,6 +323,7 @@ public abstract class AowuSpider extends Spider {
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
+        android.util.Log.w("AowuSpider", "detailContent() called, ids=" + ids);
         try {
             if (!isSiteReady() || ids == null || ids.isEmpty()) {
                 android.util.Log.e("AowuSpider", "detailContent: site not ready or empty ids");
@@ -331,7 +346,8 @@ public abstract class AowuSpider extends Spider {
                     if (TextUtils.isEmpty(pic)) pic = img.attr("src");
                 }
             }
-            vod.setVodPic(abs(pic));
+            // 关键修复：pic永不为空
+            vod.setVodPic(safePic(abs(pic)));
             String director = "", actor = "", typeName = "", area = "", year = "";
             Elements infoItems = doc.select(".hl-info li, .info li, .vod-info li, .detail-info p");
             for (Element item : infoItems) {
@@ -387,8 +403,9 @@ public abstract class AowuSpider extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        android.util.Log.w("AowuSpider", "playerContent() called, flag=" + flag + ", id=" + id);
         try {
-            // 核心修复：空 id 时返回占位URL，绝不返回空字符串给TVBox
+            // 核心修复：空 id 时返回占位URL
             if (TextUtils.isEmpty(id)) {
                 android.util.Log.e("AowuSpider", "playerContent: empty id, returning placeholder");
                 return Result.get().url(PLACEHOLDER_URL).parse(1).string();
@@ -433,7 +450,6 @@ public abstract class AowuSpider extends Spider {
             return Result.get().url(playUrl).parse(1).header(header).string();
         } catch (Exception e) {
             android.util.Log.e("AowuSpider", "playerContent error: " + e.getMessage());
-            // 异常时返回占位URL，绝不返回空字符串
             return Result.get().url(PLACEHOLDER_URL).parse(1).string();
         }
     }
@@ -445,6 +461,7 @@ public abstract class AowuSpider extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick, String pg) throws Exception {
+        android.util.Log.w("AowuSpider", "searchContent() called, key=" + key);
         try {
             if (!isSiteReady()) {
                 android.util.Log.e("AowuSpider", "searchContent: site not ready");
