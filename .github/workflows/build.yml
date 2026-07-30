@@ -46,9 +46,19 @@ jobs:
 
           echo "Extracting classes.dex from APK..."
           unzip -j "$APK" classes.dex -d "$DIR/"
-          mv "$DIR/classes.dex" "$OUT"
+
+          echo "Packing classes.dex into JAR..."
+          # ===== 修复：将裸 DEX 包装成标准 JAR（ZIP 格式）=====
+          mkdir -p META-INF
+          echo "Manifest-Version: 1.0" > META-INF/MANIFEST.MF
+          echo "Dex-Location: classes.dex" >> META-INF/MANIFEST.MF
+          jar cvf "$OUT" classes.dex META-INF/MANIFEST.MF
+          # 清理临时文件
+          rm -rf META-INF classes.dex
 
           echo "=== Verifying JAR ==="
+          echo "--- JAR contents ---"
+          jar tf "$OUT"
           echo "--- Spider classes ---"
           strings "$OUT" | grep "Lcom/github/catvod/spider/" | sort | uniq
           echo "--- Third-party libs ---"
