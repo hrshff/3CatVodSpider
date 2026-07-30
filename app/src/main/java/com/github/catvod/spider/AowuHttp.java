@@ -30,8 +30,10 @@ import okhttp3.Response;
 
 /**
  * 嗷呜级 HTTP 客户端（单例）
- * 
+ *
+ * 职责：独立管理所有 HTTP 连接，与业务完全解耦
  * 功能：CookieJar 会话 + 自定义 DNS + SSL 绕过 + 动态 UA
+ * 所有 Spider 共享同一实例，Cookie/hosts 全局隔离
  */
 public class AowuHttp {
 
@@ -50,7 +52,8 @@ public class AowuHttp {
         "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     };
 
     private final OkHttpClient client;
@@ -62,12 +65,14 @@ public class AowuHttp {
             .writeTimeout(15, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
+            // SSL 绕过
             .sslSocketFactory(createUnsafeSocketFactory(), new X509TrustManager() {
                 @Override public void checkClientTrusted(X509Certificate[] chain, String authType) {}
                 @Override public void checkServerTrusted(X509Certificate[] chain, String authType) {}
                 @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
             })
             .hostnameVerifier((hostname, session) -> true)
+            // 自定义 DNS
             .dns(new Dns() {
                 @Override
                 public List<InetAddress> lookup(String hostname) throws UnknownHostException {
@@ -83,6 +88,7 @@ public class AowuHttp {
                     return Dns.SYSTEM.lookup(hostname);
                 }
             })
+            // CookieJar
             .cookieJar(new CookieJar() {
                 @Override
                 public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
@@ -138,10 +144,6 @@ public class AowuHttp {
         } catch (Exception e) { e.printStackTrace(); }
     }
 
-    public static void clearCookie(String domain) {
-        COOKIE_STORE.remove(domain);
-    }
-
     public static String getCookieString(String host) {
         List<Cookie> cookies = COOKIE_STORE.get(host);
         if (cookies == null || cookies.isEmpty()) return "";
@@ -153,11 +155,8 @@ public class AowuHttp {
         return sb.toString();
     }
 
-    // ===== HTTP 请求（带 URL 合法性校验）=====
+    // ===== HTTP 请求 =====
     public String get(String url, HashMap<String, String> extraHeaders) throws Exception {
-        if (TextUtils.isEmpty(url) || !(url.startsWith("http://") || url.startsWith("https://"))) {
-            throw new Exception("AowuHttp.get() invalid URL: [" + url + "]");
-        }
         Request.Builder builder = new Request.Builder().url(url);
         for (Map.Entry<String, String> e : headers(null).entrySet()) builder.addHeader(e.getKey(), e.getValue());
         if (extraHeaders != null) for (Map.Entry<String, String> e : extraHeaders.entrySet()) builder.addHeader(e.getKey(), e.getValue());
@@ -168,9 +167,6 @@ public class AowuHttp {
     }
 
     public String post(String url, HashMap<String, String> params, HashMap<String, String> extraHeaders) throws Exception {
-        if (TextUtils.isEmpty(url) || !(url.startsWith("http://") || url.startsWith("https://"))) {
-            throw new Exception("AowuHttp.post() invalid URL: [" + url + "]");
-        }
         Request.Builder builder = new Request.Builder().url(url);
         for (Map.Entry<String, String> e : headers(null).entrySet()) builder.addHeader(e.getKey(), e.getValue());
         if (extraHeaders != null) for (Map.Entry<String, String> e : extraHeaders.entrySet()) builder.addHeader(e.getKey(), e.getValue());
