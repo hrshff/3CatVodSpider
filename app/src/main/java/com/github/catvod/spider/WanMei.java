@@ -364,11 +364,4 @@ public class WanMei extends AowuSpider {
 
         return Result.get().vod(list).page(page, pageCount, 24, total).string();
     }
-
-    private String extractId(String url) {
-        if (TextUtils.isEmpty(url)) return "";
-        Matcher m = ID_PATTERN.matcher(url);
-        if (m.find()) return m.group(1);
-        return "";
-    }
 }

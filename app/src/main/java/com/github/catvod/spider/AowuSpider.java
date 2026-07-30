@@ -21,6 +21,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.regex.Matcher;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -118,6 +119,10 @@ public abstract class AowuSpider extends Spider {
 
     /** URL 补全 */
     protected String abs(String url) {
+        return fixUrl(url);
+    }
+
+    protected String fixUrl(String url) {
         if (TextUtils.isEmpty(url)) return "";
         url = url.trim();
         if (url.startsWith("http://") || url.startsWith("https://")) return url;
@@ -149,7 +154,6 @@ public abstract class AowuSpider extends Spider {
 
     // ===== 本地代理委托给 AowuProxy =====
 
-    @Override
     public String proxyLocal(Map<String, String> params) throws Exception {
         return AowuProxy.handle(params);
     }
