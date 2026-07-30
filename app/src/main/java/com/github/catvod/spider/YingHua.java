@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
 
 public class YingHua extends AowuSpider {
 
-    private static final Pattern ID_PATTERN = Pattern.compile("/v/(\d+)\.html");
+    private static final Pattern ID_PATTERN = Pattern.compile("/v/(\\d+)\\.html");
 
     @Override
     public void init(Context context, String extend) throws Exception {

@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
  */
 public class Mogu extends AowuSpider {
 
-    private static final Pattern ID_PATTERN = Pattern.compile("/voddetail/(\d+)\.html");
+    private static final Pattern ID_PATTERN = Pattern.compile("/voddetail/(\\d+)\\.html");
 
     @Override
     public void init(Context context, String extend) throws Exception {
@@ -171,8 +171,8 @@ public class Mogu extends AowuSpider {
         Element script = doc.selectFirst("script:containsData(player_aaaa)");
         if (script != null) {
             String scriptText = script.data();
-            Matcher m = Pattern.compile(""url":"([^"]+)"").matcher(scriptText);
-            if (m.find()) url = m.group(1).replace("\/", "/");
+            Matcher m = Pattern.compile("\"url\":\"([^\"]+)\"").matcher(scriptText);
+            if (m.find()) url = m.group(1).replace("\\/", "/");
         }
 
         HashMap<String, String> header = new HashMap<>();

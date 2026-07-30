@@ -154,7 +154,7 @@ public class YueGuang extends AowuSpider {
         Element script = doc.selectFirst("script:containsData(player_aaaa)");
         if (script != null) {
             String data = script.data();
-            Matcher m = Pattern.compile(""url":"([^"]+)"").matcher(data);
+            Matcher m = Pattern.compile("\"url\":\"([^\"]+)\"").matcher(data);
             if (m.find()) url = m.group(1).replace("\\/", "/");
         }
 
