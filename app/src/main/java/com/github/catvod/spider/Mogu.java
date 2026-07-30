@@ -58,7 +58,7 @@ public class Mogu extends AowuSpider {
     public String homeVideoContent() throws Exception {
         String html = fetch(getActiveSite());
         Document doc = Jsoup.parse(html);
-        return Result.string(parsePosterItems(doc)).string();
+        return Result.string(parsePosterItems(doc));
     }
 
     @Override

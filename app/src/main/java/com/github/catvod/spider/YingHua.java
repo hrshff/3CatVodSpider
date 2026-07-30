@@ -43,7 +43,7 @@ public class YingHua extends AowuSpider {
     public String homeVideoContent() throws Exception {
         String html = fetch(getActiveSite() + "/");
         Document doc = Jsoup.parse(html);
-        return Result.string(parseVodList(doc)).string();
+        return Result.string(parseVodList(doc));
     }
 
     @Override
