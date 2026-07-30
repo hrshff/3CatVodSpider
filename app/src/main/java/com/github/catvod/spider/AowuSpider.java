@@ -205,7 +205,7 @@ public abstract class AowuSpider extends Spider {
     // ===== 通用业务模板（全面异常捕获）=====
 
     @Override
-    public String homeContent(boolean filter) {
+    public String homeContent(boolean filter) throws Exception {
         try {
             List<Class> classes = new ArrayList<>();
             if (siteConfig != null && siteConfig.has("classes")) {
@@ -223,7 +223,7 @@ public abstract class AowuSpider extends Spider {
     }
 
     @Override
-    public String homeVideoContent() {
+    public String homeVideoContent() throws Exception {
         try {
             if (!isSiteReady()) {
                 android.util.Log.e("AowuSpider", "homeVideoContent: site not ready");
@@ -282,7 +282,7 @@ public abstract class AowuSpider extends Spider {
     }
 
     @Override
-    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
         try {
             if (!isSiteReady()) {
                 android.util.Log.e("AowuSpider", "categoryContent: site not ready");
@@ -308,7 +308,7 @@ public abstract class AowuSpider extends Spider {
     }
 
     @Override
-    public String detailContent(List<String> ids) {
+    public String detailContent(List<String> ids) throws Exception {
         try {
             if (!isSiteReady() || ids == null || ids.isEmpty()) {
                 android.util.Log.e("AowuSpider", "detailContent: site not ready or empty ids");
@@ -386,7 +386,7 @@ public abstract class AowuSpider extends Spider {
     }
 
     @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) {
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
         try {
             // 核心修复：空 id 时返回占位URL，绝不返回空字符串给TVBox
             if (TextUtils.isEmpty(id)) {
@@ -439,12 +439,12 @@ public abstract class AowuSpider extends Spider {
     }
 
     @Override
-    public String searchContent(String key, boolean quick) {
+    public String searchContent(String key, boolean quick) throws Exception {
         return searchContent(key, quick, "1");
     }
 
     @Override
-    public String searchContent(String key, boolean quick, String pg) {
+    public String searchContent(String key, boolean quick, String pg) throws Exception {
         try {
             if (!isSiteReady()) {
                 android.util.Log.e("AowuSpider", "searchContent: site not ready");
