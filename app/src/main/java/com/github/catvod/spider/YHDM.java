@@ -1,67 +1,43 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import android.net.Uri;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
-import com.github.catvod.crawler.Spider;
-import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Crypto;
-import com.github.catvod.utils.Util;
 
-import org.json.JSONException;
-import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-/**
- * @author Qile
- * @date 2024-10-06
- */
-public class YHDM extends Spider {
+public class YHDM extends AowuSpider {
 
-    private static String siteUrl = "https://www.857fans.com";
-    private final Map<String, String> configCache = new HashMap<>();
-
-    private Map<String, String> getHeader() {
-        Map<String, String> header = new HashMap<>();
-        header.put("User-Agent", Util.CHROME);
-        return header;
+    @Override
+    public void init(Context context, String extend) throws Exception {
+        super.init(context, extend);
     }
 
     @Override
-    public void init(Context context, String extend) {
-        if (!extend.isEmpty()) siteUrl = extend;
-    }
-
-    @Override
-    public String homeContent(boolean filter) {
+    public String homeContent(boolean filter) throws Exception {
         List<Class> classes = new ArrayList<>();
         List<String> typeIds = Arrays.asList("guochandongman", "ribendongman", "dongmandianying", "omeidongman");
         List<String> typeNames = Arrays.asList("国产动漫", "日本动漫", "动漫电影", "欧美动漫");
         for (int i = 0; i < typeIds.size(); i++) classes.add(new Class(typeIds.get(i), typeNames.get(i)));
-        Document doc = Jsoup.parse(OkHttp.string(siteUrl, getHeader()));
+
+        String html = fetch(getActiveSite());
+        Document doc = Jsoup.parse(html);
         List<Vod> list = new ArrayList<>();
         for (Element li : doc.select(".stui-vodlist.clearfix .myui-vodlist__box")) {
             String vid = li.select("a").attr("href");
             String name = li.select("a").attr("title");
             String pic = li.select("a").attr("data-original");
-            if (!pic.startsWith("http")) pic = siteUrl + pic;
+            if (!pic.startsWith("http")) pic = getActiveSite() + pic;
             String remark = li.select(".pic-text.text-right").text();
             list.add(new Vod(vid, name, pic, remark));
         }
@@ -69,103 +45,75 @@ public class YHDM extends Spider {
     }
 
     @Override
-    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) {
-        String cateUrl = siteUrl + String.format("/type/%s-%s.html", tid, pg);
-        Document doc = Jsoup.parse(OkHttp.string(cateUrl, getHeader()));
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+        String cateUrl = getActiveSite() + String.format("/type/%s-%s.html", tid, pg);
+        Document doc = Jsoup.parse(fetch(cateUrl));
         List<Vod> list = new ArrayList<>();
         for (Element li : doc.select(".myui-vodlist__box")) {
             String vid = li.select("a").attr("href");
             String name = li.select("a").attr("title");
             String pic = li.select("a").attr("data-original");
-            if (!pic.startsWith("http")) pic = siteUrl + pic;
+            if (!pic.startsWith("http")) pic = getActiveSite() + pic;
             String remark = li.select(".pic-text.text-right").text();
             list.add(new Vod(vid, name, pic, remark));
         }
-        return Result.string(list);
+        int page = Integer.parseInt(pg);
+        boolean hasNext = doc.select(".myui-page .visible-xs").size() > 0;
+        return Result.get().vod(list).page(page, hasNext ? page + 1 : page, 24, list.size()).string();
     }
 
     @Override
-    public String detailContent(List<String> ids) {
-        String detailUrl = siteUrl + ids.get(0);
-        Document doc = Jsoup.parse(OkHttp.string(detailUrl, getHeader()));
-        Elements sources = doc.select(".myui-content__list.sort-list");
-        Elements circuits = doc.select("a[href^=#playlist]");
-        StringBuilder vod_play_url = new StringBuilder();
-        StringBuilder vod_play_from = new StringBuilder();
-        for (int i = 0; i < circuits.size(); i++) {
-            String spanText = circuits.get(i).text();
-            vod_play_from.append(spanText).append("$$$");
-            Elements aElementArray = sources.get(i).select("a");
-            for (int j = 0; j < aElementArray.size(); j++) {
-                Element a = aElementArray.get(j);
-                String href = a.attr("href");
-                String text = a.text();
-                vod_play_url.append(text).append("$").append(href);
-                boolean notLastEpisode = j < aElementArray.size() - 1;
-                vod_play_url.append(notLastEpisode ? "#" : "$$$");
-            }
-        }
-        String text = doc.select(".myui-content__detail").text();
-        String classifyName = matcher(text, "类型：(.*?)分类");
-        String area = matcher(text, "地区：(.*?)年份");
-        String year = matcher(text, "年份：(.*?)更新");
-        String remark = matcher(text, "更新：(.*?)简介");
-        String brief = doc.select(".col-pd.text-collapse .data").text();
+    public String detailContent(List<String> ids) throws Exception {
+        String detailUrl = getActiveSite() + ids.get(0);
+        Document doc = Jsoup.parse(fetch(detailUrl));
         Vod vod = new Vod();
         vod.setVodId(ids.get(0));
-        vod.setVodArea(area);
-        vod.setVodYear(year);
-        vod.setVodRemarks(remark);
-        vod.setVodContent(brief);
-        vod.setTypeName(classifyName);
-        vod.setVodPlayFrom(vod_play_from.toString());
-        vod.setVodPlayUrl(vod_play_url.toString());
+        vod.setVodName(doc.selectFirst(".myui-content__detail .title").text());
+        vod.setVodPic(doc.selectFirst(".myui-content__thumb img").attr("data-original"));
+        vod.setTypeName(doc.select(".myui-content__detail p").get(0).text().replace("类型：", ""));
+        vod.setVodYear(doc.select(".myui-content__detail p").get(1).text().replace("年份：", ""));
+        vod.setVodArea(doc.select(".myui-content__detail p").get(2).text().replace("地区：", ""));
+        vod.setVodContent(doc.selectFirst(".desc .content") != null ? doc.selectFirst(".desc .content").text() : "");
+
+        List<String> playFroms = new ArrayList<>();
+        List<String> playUrls = new ArrayList<>();
+        for (Element tab : doc.select(".nav-tabs li")) {
+            playFroms.add(tab.select("a").text());
+        }
+        for (Element ul : doc.select(".myui-content__list")) {
+            List<String> urls = new ArrayList<>();
+            for (Element a : ul.select("a")) {
+                urls.add(a.text() + "$" + a.attr("href"));
+            }
+            playUrls.add(String.join("#", urls));
+        }
+        vod.setVodPlayFrom(String.join("$$$", playFroms));
+        vod.setVodPlayUrl(String.join("$$$", playUrls));
         return Result.string(vod);
     }
 
     @Override
-    public String searchContent(String key, boolean quick) {
-        String searchUrl = siteUrl + "/search/" + Uri.encode(key) + "-------------.html";
-        Document doc = Jsoup.parse(OkHttp.string(searchUrl, getHeader()));
-        List<Vod> list = new ArrayList<>();
-        for (Element li : doc.select("li.clearfix")) {
-            String vid = li.select("a").attr("href");
-            String name = li.select("a").attr("title");
-            String pic = li.select("a").attr("data-original");
-            if (!pic.startsWith("http")) pic = siteUrl + pic;
-            String remark = li.select(".pic-text.text-right").text();
-            list.add(new Vod(vid, name, pic, remark));
-        }
-        return Result.string(list);
+    public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
+        String playerUrl = getActiveSite() + id;
+        Document doc = Jsoup.parse(fetch(playerUrl));
+        String url = doc.selectFirst("iframe").attr("src");
+        if (!url.startsWith("http")) url = "https:" + url;
+        return Result.get().url(url).parse(1).header(new HashMap<String, String>() {{ put("Referer", playerUrl); }}).string();
     }
 
     @Override
-    public String playerContent(String flag, String id, List<String> vipFlags) throws JSONException {
-        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyyMMdd", Locale.getDefault());
-        String todayDate = dateFormat.format(new Date());
-        String ConfigUrl = siteUrl + "/static/js/playerconfig.js?t=" + todayDate;
-        if (!configCache.containsKey(ConfigUrl)) {
-            String ConfigContent = OkHttp.string(ConfigUrl, getHeader());
-            String ConfigObject = matcher(ConfigContent, "player_list=(.*?),MacPlayerConfig");
-            configCache.put(ConfigUrl, ConfigObject);
+    public String searchContent(String key, boolean quick) throws Exception {
+        String searchUrl = getActiveSite() + "/search/" + key + ".html";
+        Document doc = Jsoup.parse(fetch(searchUrl));
+        List<Vod> list = new ArrayList<>();
+        for (Element li : doc.select(".myui-vodlist__box")) {
+            String vid = li.select("a").attr("href");
+            String name = li.select("a").attr("title");
+            String pic = li.select("a").attr("data-original");
+            if (!pic.startsWith("http")) pic = getActiveSite() + pic;
+            String remark = li.select(".pic-text.text-right").text();
+            list.add(new Vod(vid, name, pic, remark));
         }
-        String content = OkHttp.string(siteUrl + id, getHeader());
-        String json = matcher(content, "player_aaaa=(.*?)</script>");
-        JSONObject player = new JSONObject(json);
-        String aaaaUrl = player.getString("url");
-        String from = player.getString("from");
-        String parseUrl = new JSONObject(configCache.get(ConfigUrl)).getJSONObject(from).getString("parse");
-        String parseUrls = parseUrl + aaaaUrl;
-        String content1 = OkHttp.string(parseUrls, getHeader());
-        String playUrl = matcher(content1, "getVideoInfo\\(\"(.*?)\"");
-        String key = "57A891D97E332A9D";
-        String iv = matcher(content1, "bt_token = \"(.*?)\"");
-        String realUrl = Crypto.CBC(playUrl, key, iv);
-        return Result.get().url(realUrl).string();
-    }
-
-    private String matcher(String content, String pattern) {
-        Matcher matcher = Pattern.compile(pattern).matcher(content);
-        return matcher.find() ? matcher.group(1) : "";
+        return Result.get().vod(list).page(1, 1, 24, list.size()).string();
     }
 }

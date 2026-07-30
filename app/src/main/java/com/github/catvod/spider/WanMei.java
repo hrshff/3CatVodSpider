@@ -1,14 +1,11 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import com.github.catvod.utils.Logger;
 import android.text.TextUtils;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
-import com.github.catvod.crawler.Spider;
-import com.github.catvod.net.OkHttp;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -23,46 +20,9 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * 完美动漫 (www.wmdm.cc)
- * 修复：增加翻页诊断日志，修正 hasNext 与元数据计算
- */
-public class WanMei extends Spider {
+public class WanMei extends AowuSpider {
 
-    private static final String SITE_URL = "https://www.wmdm.cc";
-
-    private HashMap<String, String> getHeaders() {
-        HashMap<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 15; 2407FRK8EC Build/AP3A.240617.008; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/128.0.6613.127 Mobile Safari/537.36");
-        headers.put("Referer", SITE_URL + "/");
-        return headers;
-    }
-
-    private String fetch(String url) {
-        Logger.log("DEBUG", "[WanMei] HTTP Request: " + url);
-        long start = System.currentTimeMillis();
-        String html = OkHttp.string(url, getHeaders());
-        long cost = System.currentTimeMillis() - start;
-        Logger.log("DEBUG", "[WanMei] HTTP Response: code=200 len=" + (html != null ? html.length() : 0) + " cost=" + cost + "ms");
-        return html;
-    }
-
-    private String fixUrl(String url) {
-        if (TextUtils.isEmpty(url)) return "";
-        if (url.startsWith("http")) return url;
-        if (url.startsWith("//")) return "https:" + url;
-        if (url.startsWith("/")) return SITE_URL + url;
-        return SITE_URL + "/" + url;
-    }
-
-
-
-    private String extractId(String url) {
-        if (TextUtils.isEmpty(url)) return "";
-        Matcher m = Pattern.compile("/content/(\\d+)\\.html").matcher(url);
-        if (m.find()) return m.group(1);
-        return "";
-    }
+    private static final Pattern ID_PATTERN = Pattern.compile("/content/(\d+)\.html");
 
     @Override
     public void init(Context context, String extend) throws Exception {
@@ -71,7 +31,6 @@ public class WanMei extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        Logger.log("DEBUG", "[WanMei-homeContent] start");
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("20", "国产动漫"));
         classes.add(new Class("21", "日韩动漫"));
@@ -82,17 +41,17 @@ public class WanMei extends Spider {
 
     @Override
     public String homeVideoContent() throws Exception {
-        Logger.log("DEBUG", "[WanMei-homeVideoContent] start");
         List<Vod> list = new ArrayList<>();
         HashSet<String> idSet = new HashSet<>();
 
-        String html = fetch(SITE_URL + "/");
+        String html = fetch(getActiveSite() + "/");
         Document doc = Jsoup.parse(html);
 
         Elements slides = doc.select(".carousel-item");
         for (Element slide : slides) {
             Element link = slide.selectFirst("a.media-content");
             if (link == null) continue;
+
             String href = fixUrl(link.attr("href"));
             String id = extractId(href);
             if (TextUtils.isEmpty(id)) continue;
@@ -130,6 +89,63 @@ public class WanMei extends Spider {
             if (idSet.contains(id)) continue;
 
             String title = "";
+            Element imgEl = item.selectFirst("img");
+            if (imgEl != null) title = imgEl.attr("alt");
+            if (TextUtils.isEmpty(title)) {
+                Element parent = item.parent();
+                if (parent != null) {
+                    Element h3 = parent.selectFirst("h3 a");
+                    if (h3 != null) title = h3.text().trim();
+                }
+            }
+            if (TextUtils.isEmpty(title)) continue;
+
+            String pic = "";
+            if (imgEl != null) {
+                pic = imgEl.attr("data-src");
+                if (TextUtils.isEmpty(pic)) pic = imgEl.attr("src");
+            }
+
+            String status = "";
+            Element note = item.selectFirst("span.position-absolute");
+            if (note != null) status = note.text().trim();
+
+            idSet.add(id);
+
+            Vod vod = new Vod();
+            vod.setVodId(id);
+            vod.setVodName(title);
+            vod.setVodPic(fixUrl(pic));
+            vod.setVodRemarks(status);
+            list.add(vod);
+        }
+
+        return Result.string(list);
+    }
+
+    @Override
+    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
+        List<Vod> list = new ArrayList<>();
+        int page;
+        try { page = Integer.parseInt(pg); } catch (Exception e) { page = 1; }
+
+        String url;
+        if (page == 1) {
+            url = getActiveSite() + "/list/" + tid + ".html";
+        } else {
+            url = getActiveSite() + "/list/" + tid + "/index_" + page + ".html";
+        }
+
+        String html = fetch(url);
+        Document doc = Jsoup.parse(html);
+
+        Elements items = doc.select("a.media-content");
+        for (Element item : items) {
+            String href = fixUrl(item.attr("href"));
+            String id = extractId(href);
+            if (TextUtils.isEmpty(id)) continue;
+
+            String title = "";
             Element img = item.selectFirst("img");
             if (img != null) title = img.attr("alt");
             if (TextUtils.isEmpty(title)) {
@@ -151,7 +167,6 @@ public class WanMei extends Spider {
             Element note = item.selectFirst("span.position-absolute");
             if (note != null) status = note.text().trim();
 
-            idSet.add(id);
             Vod vod = new Vod();
             vod.setVodId(id);
             vod.setVodName(title);
@@ -160,100 +175,19 @@ public class WanMei extends Spider {
             list.add(vod);
         }
 
-        return Result.string(list);
-    }
+        boolean hasNext = doc.select(".page-list a").size() > 0 || list.size() >= 24;
+        int pageCount = hasNext ? page + 1 : page;
+        int total = list.size() > 0 ? page * 24 + 1 : 0;
 
-    @Override
-    public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        Logger.log("DEBUG", "[WanMei-categoryContent] start");
-        List<Vod> list = new ArrayList<>();
-        int page;
-        try {
-            page = Integer.parseInt(pg);
-        } catch (Exception e) {
-            page = 1;
-        }
-
-        String url;
-        if (page == 1) {
-            url = SITE_URL + "/htmlshow/" + tid + "-----------.html";
-        } else {
-            url = SITE_URL + "/htmlshow/" + tid + "--------" + page + "---.html";
-        }
-
-        try {
-            String html = fetch(url);
-            if (TextUtils.isEmpty(html)) {
-                Logger.log("DEBUG", "[WanMei-DEBUG] fetch empty, url=" + url);
-                return Result.get().vod(list).page(page, page, 24, 0).string();
-            }
-
-            Logger.log("DEBUG", "[WanMei-DEBUG] fetch ok, url=" + url + " len=" + html.length());
-            Document doc = Jsoup.parse(html);
-
-            Elements items = doc.select("a.media-content");
-            Logger.log("DEBUG", "[WanMei-DEBUG] items=" + items.size());
-
-            for (Element item : items) {
-                String href = fixUrl(item.attr("href"));
-                String id = extractId(href);
-                if (TextUtils.isEmpty(id)) continue;
-
-                String title = "";
-                Element img = item.selectFirst("img");
-                if (img != null) title = img.attr("alt");
-                if (TextUtils.isEmpty(title)) {
-                    Element parent = item.parent();
-                    if (parent != null) {
-                        Element h3 = parent.selectFirst("h3 a");
-                        if (h3 != null) title = h3.text().trim();
-                    }
-                }
-                if (TextUtils.isEmpty(title)) continue;
-
-                String pic = "";
-                if (img != null) {
-                    pic = img.attr("data-src");
-                    if (TextUtils.isEmpty(pic)) pic = img.attr("src");
-                }
-
-                String status = "";
-                Element note = item.selectFirst("span.position-absolute");
-                if (note != null) status = note.text().trim();
-
-                Vod vod = new Vod();
-                vod.setVodId(id);
-                vod.setVodName(title);
-                vod.setVodPic(fixUrl(pic));
-                vod.setVodRemarks(status);
-                list.add(vod);
-            }
-
-            boolean hasNext = doc.select("a[href*=htmlshow]").size() > items.size() || list.size() >= 24;
-            int pageCount = hasNext ? page + 1 : page;
-            int total = hasNext ? 99999 : list.size();
-
-            if (!list.isEmpty()) {
-                list.get(0).setVodRemarks("url=" + url.replace(SITE_URL, "") + "|items=" + list.size() + "|hasNext=" + hasNext);
-            }
-
-            Logger.log("DEBUG", "[WanMei-DEBUG] return items=" + list.size() + " pageCount=" + pageCount);
-            return Result.get().vod(list).page(page, pageCount, 24, total).string();
-
-        } catch (Exception e) {
-            Logger.log("DEBUG", "[WanMei] Exception: " + e.getClass().getSimpleName() + " " + e.getMessage());
-            // 异常信息带上下文，TVBox 界面会显示，方便用户截图定位
-            throw new Exception("[WanMei] 分类获取失败: tid=" + tid + ", page=" + page + ", url=" + url + ", 原因=" + e.getMessage(), e);
-        }
+        return Result.get().vod(list).page(page, pageCount, 24, total).string();
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        Logger.log("DEBUG", "[WanMei-detailContent] start");
         if (ids == null || ids.isEmpty()) return "";
         String id = ids.get(0);
 
-        String detailUrl = SITE_URL + "/content/" + id + ".html";
+        String detailUrl = getActiveSite() + "/content/" + id + ".html";
         String html = fetch(detailUrl);
         Document doc = Jsoup.parse(html);
 
@@ -267,9 +201,7 @@ public class WanMei extends Spider {
         Element ogImg = doc.selectFirst("meta[property=og:image]");
         if (ogImg != null) {
             pic = ogImg.attr("content");
-            if (pic.contains(SITE_URL + "http")) {
-                pic = pic.replace(SITE_URL, "");
-            }
+            if (pic.contains(getActiveSite() + "http")) pic = pic.replace(getActiveSite(), "");
         }
         if (TextUtils.isEmpty(pic)) {
             Element img = doc.selectFirst(".media-content img");
@@ -280,46 +212,16 @@ public class WanMei extends Spider {
         }
         vod.setVodPic(fixUrl(pic));
 
-        String director = "";
-        String actor = "";
-        String typeName = "";
-        String area = "";
-        String year = "";
-
+        String director = "", actor = "", typeName = "", area = "", year = "";
         Elements infoItems = doc.select(".hl-info li, .info li");
         for (Element item : infoItems) {
             String text = item.text();
-            if (text.contains("导演")) {
-                director = text.replace("导演：", "").replace("导演:", "").trim();
-            } else if (text.contains("主演")) {
-                actor = text.replace("主演：", "").replace("主演:", "").trim();
-            } else if (text.contains("类型")) {
-                typeName = text.replace("类型：", "").replace("类型:", "").trim();
-            } else if (text.contains("地区")) {
-                area = text.replace("地区：", "").replace("地区:", "").trim();
-            } else if (text.contains("年份") || text.contains("年代")) {
-                year = text.replace("年份：", "").replace("年份:", "").replace("年代：", "").trim();
-            }
+            if (text.contains("导演")) director = text.replace("导演：", "").replace("导演:", "").trim();
+            else if (text.contains("主演")) actor = text.replace("主演：", "").replace("主演:", "").trim();
+            else if (text.contains("类型")) typeName = text.replace("类型：", "").replace("类型:", "").trim();
+            else if (text.contains("地区")) area = text.replace("地区：", "").replace("地区:", "").trim();
+            else if (text.contains("年份") || text.contains("年代")) year = text.replace("年份：", "").replace("年份:", "").replace("年代：", "").trim();
         }
-
-        if (TextUtils.isEmpty(director) || TextUtils.isEmpty(actor)) {
-            for (Element li : doc.select("li")) {
-                String text = li.text();
-                if (text.contains("导演") && TextUtils.isEmpty(director)) {
-                    Element a = li.selectFirst("a");
-                    if (a != null) director = a.text().trim();
-                }
-                if (text.contains("主演") && TextUtils.isEmpty(actor)) {
-                    StringBuilder sb = new StringBuilder();
-                    for (Element a : li.select("a")) {
-                        if (sb.length() > 0) sb.append(",");
-                        sb.append(a.text().trim());
-                    }
-                    if (sb.length() > 0) actor = sb.toString();
-                }
-            }
-        }
-
         vod.setVodDirector(director);
         vod.setVodActor(actor);
         vod.setTypeName(typeName);
@@ -329,9 +231,7 @@ public class WanMei extends Spider {
         Element descEl = doc.selectFirst("meta[name=description]");
         if (descEl != null) {
             String desc = descEl.attr("content");
-            if (desc.contains("剧情：")) {
-                desc = desc.substring(desc.indexOf("剧情：") + 3);
-            }
+            if (desc.contains("剧情：")) desc = desc.substring(desc.indexOf("剧情：") + 3);
             vod.setVodContent(desc.trim());
         }
 
@@ -348,9 +248,7 @@ public class WanMei extends Spider {
         }
 
         Elements playlists = doc.select(".v-playurl .hl-plays-list");
-        if (playlists.isEmpty()) {
-            playlists = doc.select(".hl-plays-list");
-        }
+        if (playlists.isEmpty()) playlists = doc.select(".hl-plays-list");
 
         for (int i = 0; i < playlists.size(); i++) {
             Element playlist = playlists.get(i);
@@ -377,10 +275,7 @@ public class WanMei extends Spider {
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        Logger.log("DEBUG", "[WanMei-playerContent] start");
-        if (TextUtils.isEmpty(id)) {
-            return Result.get().url("").string();
-        }
+        if (TextUtils.isEmpty(id)) return Result.get().url("").string();
 
         String playUrl = id.startsWith("http") ? id : fixUrl(id);
         String html = fetch(playUrl);
@@ -388,24 +283,18 @@ public class WanMei extends Spider {
 
         String url = "";
         Element playerDiv = doc.selectFirst(".video-iframe");
-        if (playerDiv != null) {
-            url = playerDiv.attr("data-play");
-        }
+        if (playerDiv != null) url = playerDiv.attr("data-play");
 
-        HashMap<String, String> header = getHeaders();
-        header.put("Origin", SITE_URL);
+        HashMap<String, String> header = new HashMap<>();
+        header.put("Origin", getActiveSite());
         header.put("Referer", playUrl);
 
         if (flag.contains("YZ") || flag.contains("yz")) {
             return Result.get().url(playUrl).parse(1).header(header).string();
         }
 
-        if (!TextUtils.isEmpty(url)) {
-            boolean isM3u8 = url.contains(".m3u8");
-            boolean isMp4 = url.contains(".mp4");
-            if (isM3u8 || isMp4) {
-                return Result.get().url(url).parse(0).header(header).string();
-            }
+        if (!TextUtils.isEmpty(url) && (url.contains(".m3u8") || url.contains(".mp4"))) {
+            return Result.get().url(url).parse(0).header(header).string();
         }
 
         Element iframe = doc.selectFirst("iframe");
@@ -419,7 +308,6 @@ public class WanMei extends Spider {
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        Logger.log("DEBUG", "[WanMei-searchContent] start");
         return searchContent(key, quick, "1");
     }
 
@@ -427,17 +315,11 @@ public class WanMei extends Spider {
     public String searchContent(String key, boolean quick, String pg) throws Exception {
         List<Vod> list = new ArrayList<>();
         int page;
-        try {
-            page = Integer.parseInt(pg);
-        } catch (Exception e) {
-            page = 1;
-        }
+        try { page = Integer.parseInt(pg); } catch (Exception e) { page = 1; }
 
         String encodedKey = URLEncoder.encode(key, "UTF-8");
-        String url = SITE_URL + "/dmso/so.html?wd=" + encodedKey;
-        if (page > 1) {
-            url = url + "&page=" + page;
-        }
+        String url = getActiveSite() + "/dmso/so.html?wd=" + encodedKey;
+        if (page > 1) url = url + "&page=" + page;
 
         String html = fetch(url);
         Document doc = Jsoup.parse(html);
@@ -476,14 +358,17 @@ public class WanMei extends Spider {
             list.add(vod);
         }
 
-        boolean hasNext = doc.select(".page-link, .pagination a, .page-list a").size() > 0 || list.size() >= 24;
+        boolean hasNext = doc.select(".page-list a").size() > 0 || list.size() >= 24;
         int pageCount = hasNext ? page + 1 : page;
         int total = list.isEmpty() ? 0 : list.size();
 
-        // 调试信息：放入第一个条目的备注中（如果列表不为空）
-        if (!list.isEmpty()) {
-            list.get(0).setVodRemarks("url=" + url.replace(SITE_URL, "") + "|items=" + list.size() + "|hasNext=" + hasNext);
-        }
         return Result.get().vod(list).page(page, pageCount, 24, total).string();
+    }
+
+    private String extractId(String url) {
+        if (TextUtils.isEmpty(url)) return "";
+        Matcher m = ID_PATTERN.matcher(url);
+        if (m.find()) return m.group(1);
+        return "";
     }
 }

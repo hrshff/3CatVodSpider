@@ -1,15 +1,11 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import com.github.catvod.utils.Logger;
 import android.text.TextUtils;
 
 import com.github.catvod.bean.Class;
 import com.github.catvod.bean.Result;
 import com.github.catvod.bean.Vod;
-import com.github.catvod.crawler.Spider;
-import com.github.catvod.net.OkHttp;
-import com.github.catvod.utils.Util;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -19,85 +15,24 @@ import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Map;
+import java.util.HashSet;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import okhttp3.Cookie;
-import okhttp3.CookieJar;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
 /**
  * 月光影视 (www.shipian8.com)
- * 修复：统一为 Result 工具类风格，保留 CookieJar 反爬，修正元数据计算
+ * TVBox Java Spider - 嗷呜模式升级版
+ *
+ * 升级内容：
+ * 1. extends AowuSpider（统一基类）
+ * 2. 删除自建 customClient/cookieStore/safeDns()
+ * 3. 使用基类 fetch() + 动态UA + CookieJar
+ * 4. ext 支持对象配置
  */
-public class YueGuang extends Spider {
+public class YueGuang extends AowuSpider {
 
-    private static final String SITE_URL = "https://www.shipian8.com";
-
-    private static final List<Cookie> cookieStore = new ArrayList<>();
-    private static OkHttpClient customClient;
-
-    public static OkHttpClient client() {
-        if (customClient == null) {
-            customClient = new OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
-                .writeTimeout(15, TimeUnit.SECONDS)
-                .cookieJar(new CookieJar() {
-                    @Override
-                    public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
-                        cookieStore.addAll(cookies);
-                    }
-                    @Override
-                    public List<Cookie> loadForRequest(HttpUrl url) {
-                        return cookieStore;
-                    }
-                })
-                .build();
-        }
-        return customClient;
-    }
-
-    private HashMap<String, String> getHeaders(String referer) {
-        HashMap<String, String> headers = new HashMap<>();
-        headers.put("User-Agent", Util.CHROME);
-        headers.put("Referer", TextUtils.isEmpty(referer) ? SITE_URL + "/" : referer);
-        return headers;
-    }
-
-    private String fetch(String url, String referer) throws Exception {
-        Logger.log("DEBUG", "[YueGuang] HTTP Request: " + url);
-        long start = System.currentTimeMillis();
-        Request request = new Request.Builder()
-            .url(url)
-            .header("User-Agent", Util.CHROME)
-            .header("Referer", TextUtils.isEmpty(referer) ? SITE_URL + "/" : referer)
-            .build();
-        try (Response response = client().newCall(request).execute()) {
-            String html = response.body() != null ? response.body().string() : "";
-            long cost = System.currentTimeMillis() - start;
-            Logger.log("DEBUG", "[YueGuang] HTTP Response: code=" + response.code() + " len=" + html.length() + " cost=" + cost + "ms");
-            return html;
-        }
-    }
-
-    private String fixUrl(String url) {
-        if (TextUtils.isEmpty(url)) return "";
-        if (url.startsWith("http://") || url.startsWith("https://")) return url;
-        if (url.startsWith("//")) return "https:" + url;
-        return SITE_URL + url;
-    }
-
-    private boolean isValidHtml(String html) {
-        if (html == null || html.length() < 5000) return false;
-        return html.contains("stui-vodlist") || html.contains("vodlist") || html.contains("class=\"stui-") || html.contains("player_");
-    }
+    private static final Pattern ID_PATTERN = Pattern.compile("/voddetail/(\\d+)\\.html");
 
     @Override
     public void init(Context context, String extend) throws Exception {
@@ -106,121 +41,42 @@ public class YueGuang extends Spider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        Logger.log("DEBUG", "[YueGuang-homeContent] start");
         List<Class> classes = new ArrayList<>();
         classes.add(new Class("1", "电影"));
         classes.add(new Class("2", "电视剧"));
         classes.add(new Class("3", "综艺"));
         classes.add(new Class("4", "动漫"));
-        classes.add(new Class("5", "短剧"));
         return Result.string(classes, new ArrayList<>());
     }
 
     @Override
     public String homeVideoContent() throws Exception {
-        Logger.log("DEBUG", "[YueGuang-homeVideoContent] start");
-        String html = fetch(SITE_URL, null);
+        String html = fetch(getActiveSite());
         Document doc = Jsoup.parse(html);
-        List<Vod> list = parseVodList(doc);
-        return Result.string(list);
+        return Result.string(parseVodList(doc)).string();
     }
 
     @Override
     public String categoryContent(String tid, String pg, boolean filter, HashMap<String, String> extend) throws Exception {
-        Logger.log("DEBUG", "[YueGuang-categoryContent] start");
-        int page;
-        try {
-            page = Integer.parseInt(pg);
-        } catch (Exception e) {
-            page = 1;
-        }
+        int page = 1;
+        try { page = Integer.parseInt(pg); } catch (Exception ignored) {}
 
-        String url = page == 1
-            ? SITE_URL + "/zwhstp/" + tid + ".html"
-            : SITE_URL + "/zwhstp/" + tid + "-" + page + ".html";
-
-        Logger.log("DEBUG", "[YueGuang-DEBUG] categoryContent url=" + url);
-        String html = fetch(url, SITE_URL + "/");
-
-        if (!isValidHtml(html)) {
-            Logger.log("DEBUG", "[YueGuang-DEBUG] categoryContent INVALID html, fallback to home");
-            String homeHtml = fetch(SITE_URL, null);
-            if (isValidHtml(homeHtml)) {
-                Document homeDoc = Jsoup.parse(homeHtml);
-                List<Vod> list = parseVodList(homeDoc);
-                return Result.get().vod(list).page(page, page, 24, list.size()).string();
-            }
-        }
-
+        String url = getActiveSite() + "/vodshow/" + tid + "--------" + page + ".html";
+        String html = fetch(url);
         Document doc = Jsoup.parse(html);
         List<Vod> list = parseVodList(doc);
 
-        // 从分页控件提取真实总页数
-        boolean hasNext = doc.select(".stui-page, .page, .page-link, .pagination, .fed-page-info").size() > 0 || list.size() >= 24;
-        int pageCount = hasNext ? page + 1 : page;
-        int total = hasNext ? 99999 : page * list.size();
-
-        Element numEl = doc.selectFirst(".stui-page .num");
-        if (numEl != null) {
-            String text = numEl.text(); // e.g. "2/2812"
-            String[] arr = text.split("/");
-            if (arr.length == 2) {
-                try {
-                    pageCount = Integer.parseInt(arr[1].trim());
-                    total = pageCount * Math.max(list.size(), 1);
-                } catch (Exception ignored) {}
-            }
-        } else {
-            // 从尾页链接提取（备用）
-            Elements pageLinks = doc.select(".stui-page a");
-            for (Element a : pageLinks) {
-                String text = a.text();
-                if (text.contains("尾页") || text.contains("最后一页")) {
-                    String href = a.attr("href");
-                    Matcher m = Pattern.compile("-(\\d+)\\.html").matcher(href);
-                    if (m.find()) {
-                        try {
-                            pageCount = Integer.parseInt(m.group(1));
-                            total = pageCount * Math.max(list.size(), 1);
-                        } catch (Exception ignored) {}
-                    }
-                    break;
-                }
-            }
-        }
-
-        // 如果无法提取，保持原有逻辑
-        if (pageCount <= page) {
-            pageCount = hasNext ? page + 1 : page;
-        }
-        if (total <= 0) {
-            total = hasNext ? 99999 : page * list.size();
-        }
-
-        // limit 使用实际列表大小（月光每页固定20项）
-        int limit = list.size() > 0 ? list.size() : 24;
-
-        Logger.log("DEBUG", "[YueGuang-DEBUG] categoryContent page=" + page + " items=" + list.size() + " pageCount=" + pageCount + " total=" + total + " limit=" + limit);
-        // 调试信息：放入第一个条目的备注中
-        if (!list.isEmpty()) {
-            list.get(0).setVodRemarks("items=" + list.size() + "|pageCount=" + pageCount + "|limit=" + limit);
-        }
-        try {
-            return Result.get().vod(list).page(page, pageCount, limit, total).string();
-        } catch (Exception e) {
-            Logger.log("DEBUG", "[YueGuang] Exception: " + e.getMessage());
-            throw new Exception("[YueGuang] 分类获取失败: tid=" + tid + ", page=" + page + ", 原因=" + e.getMessage(), e);
-        }
+        boolean hasNext = doc.select(".stui-page__item li").size() > 0 || list.size() >= 24;
+        return Result.get().vod(list).page(page, hasNext ? page + 1 : page, 24, list.size() > 0 ? page * 24 + 1 : 0).string();
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        Logger.log("DEBUG", "[YueGuang-detailContent] start");
         if (ids == null || ids.isEmpty()) return "";
         String id = ids.get(0);
-        if (TextUtils.isEmpty(id)) return "";
 
-        String html = fetch(id, SITE_URL + "/zwhstp/1.html");
+        String detailUrl = getActiveSite() + "/voddetail/" + id + ".html";
+        String html = fetch(detailUrl);
         Document doc = Jsoup.parse(html);
 
         Vod vod = new Vod();
@@ -229,258 +85,134 @@ public class YueGuang extends Spider {
         Element h1 = doc.selectFirst("h1.title");
         if (h1 != null) vod.setVodName(h1.text().trim());
 
-        String vodPic = "";
-        String vodContent = "";
-        String vodYear = "";
-        Element ldScript = doc.selectFirst("script[type=application/ld+json]");
-        if (ldScript != null) {
-            String ldJson = ldScript.html();
-            Matcher m1 = Pattern.compile("\\\"thumbnailUrl\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").matcher(ldJson);
-            if (m1.find()) vodPic = m1.group(1);
-            Matcher m2 = Pattern.compile("\\\"description\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").matcher(ldJson);
-            if (m2.find()) vodContent = m2.group(1).replace("&amp;nbsp;", " ").trim();
-            Matcher m3 = Pattern.compile("\\\"uploadDate\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").matcher(ldJson);
-            if (m3.find()) {
-                String date = m3.group(1);
-                if (date.length() >= 4) vodYear = date.substring(0, 4);
-            }
+        String pic = "";
+        Element img = doc.selectFirst(".stui-vodlist__thumb img");
+        if (img != null) {
+            pic = img.attr("data-original");
+            if (TextUtils.isEmpty(pic)) pic = img.attr("src");
         }
-        vod.setVodPic(vodPic);
-        vod.setVodContent(vodContent);
-        vod.setVodYear(vodYear);
+        vod.setVodPic(abs(pic));
 
-        String vodActor = "";
-        String vodDirector = "";
-        String vodClass = "";
-        String vodArea = "";
-
-        Element detailInfo = doc.selectFirst(".stui-content__detail");
-        if (detailInfo != null) {
-            Elements actorLinks = detailInfo.select("p.data a[href*=/zwhssc/]");
-            List<String> actors = new ArrayList<>();
-            for (Element a : actorLinks) {
-                String name = a.text().trim();
-                if (!TextUtils.isEmpty(name)) actors.add(name);
-            }
-            vodActor = String.join(",", actors);
-
-            Element dataP = detailInfo.selectFirst("p.data");
-            String dataText = dataP != null ? dataP.text() : "";
-
-            Matcher md = Pattern.compile("导演[:：]\\s*([^\\n]+)").matcher(dataText);
-            if (md.find()) vodDirector = md.group(1).trim();
-            Matcher mc = Pattern.compile("类型[:：]\\s*([^\\n]+)").matcher(dataText);
-            if (mc.find()) vodClass = mc.group(1).trim();
-            Matcher ma = Pattern.compile("地区[:：]\\s*([^\\n]+)").matcher(dataText);
-            if (ma.find()) vodArea = ma.group(1).trim();
+        // 信息
+        Elements items = doc.select(".stui-content__detail p");
+        for (Element p : items) {
+            String text = p.text();
+            if (text.contains("导演")) vod.setVodDirector(text.replace("导演：", "").trim());
+            else if (text.contains("主演")) vod.setVodActor(text.replace("主演：", "").trim());
+            else if (text.contains("类型")) vod.setTypeName(text.replace("类型：", "").trim());
+            else if (text.contains("地区")) vod.setVodArea(text.replace("地区：", "").trim());
+            else if (text.contains("年份")) vod.setVodYear(text.replace("年份：", "").trim());
         }
 
-        vod.setVodActor(vodActor);
-        vod.setVodDirector(vodDirector);
-        vod.setTypeName(vodClass);
-        vod.setVodArea(vodArea);
+        // 简介
+        Element desc = doc.selectFirst(".stui-content__desc");
+        if (desc != null) vod.setVodContent(desc.text().trim());
 
-        List<String> froms = new ArrayList<>();
-        List<String> urls = new ArrayList<>();
+        // 播放源
+        List<String> playFroms = new ArrayList<>();
+        List<String> playUrls = new ArrayList<>();
 
-        Elements tabs = doc.select(".stui-content__playlist");
-        Elements tabNames = doc.select(".stui-pannel__head h3.title");
-
+        Elements tabs = doc.select(".nav-tabs li");
         for (int i = 0; i < tabs.size(); i++) {
-            String sourceName = (i < tabNames.size()) ? tabNames.get(i).text().trim() : ("源" + (i + 1));
-            List<String> playLinks = new ArrayList<>();
-            Elements links = tabs.get(i).select("li a[href]");
-            for (Element a : links) {
-                String href = a.attr("href");
-                String epName = a.text().trim();
-                if (!TextUtils.isEmpty(href) && !TextUtils.isEmpty(epName)) {
-                    playLinks.add(epName + "$" + fixUrl(href));
+            Element tab = tabs.get(i);
+            String name = tab.selectFirst("a") != null ? tab.selectFirst("a").text().trim() : ("线路" + (i + 1));
+            playFroms.add(name);
+        }
+        if (playFroms.isEmpty()) playFroms.add("默认线路");
+
+        Elements playlists = doc.select(".stui-play__list");
+        for (int i = 0; i < playlists.size(); i++) {
+            Element playlist = playlists.get(i);
+            Elements links = playlist.select("a");
+            List<String> urls = new ArrayList<>();
+            for (Element link : links) {
+                String name = link.text().trim();
+                String href = abs(link.attr("href"));
+                if (!TextUtils.isEmpty(name) && !TextUtils.isEmpty(href)) {
+                    urls.add(name + "$" + href);
                 }
             }
-            if (!playLinks.isEmpty()) {
-                froms.add(sourceName);
-                urls.add(String.join("#", playLinks));
-            }
+            playUrls.add(String.join("#", urls));
         }
 
-        vod.setVodPlayFrom(String.join("$$$", froms));
-        vod.setVodPlayUrl(String.join("$$$", urls));
+        vod.setVodPlayFrom(String.join("$$$", playFroms));
+        vod.setVodPlayUrl(String.join("$$$", playUrls));
 
         return Result.string(vod);
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        Logger.log("DEBUG", "[YueGuang-playerContent] start");
-        if (TextUtils.isEmpty(id)) {
-            return Result.get().url("").string();
+        if (TextUtils.isEmpty(id)) return Result.get().url("").string();
+
+        String playUrl = id.startsWith("http") ? id : abs(id);
+        String html = fetch(playUrl);
+        Document doc = Jsoup.parse(html);
+
+        // player_aaaa 解密
+        String url = "";
+        Element script = doc.selectFirst("script:containsData(player_aaaa)");
+        if (script != null) {
+            String data = script.data();
+            Matcher m = Pattern.compile(""url":"([^"]+)"").matcher(data);
+            if (m.find()) url = m.group(1).replace("\\/", "/");
         }
-
-        Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent start, id=" + id + ", flag=" + flag);
-
-        String html = fetch(id, SITE_URL + "/zwhsdt/1.html");
-        String preview = html.length() > 200 ? html.substring(0, 200) : html;
-        Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent html len=" + html.length() + " preview=" + preview.replace("\n", " "));
-
-        if (!isValidHtml(html)) {
-            Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent INVALID html");
-            return Result.get().url("").string();
-        }
-
-        Matcher mp = Pattern.compile("var\\s+player_\\w+\\s*=\\s*(\\{.*?\\})\\s*</script>", Pattern.DOTALL).matcher(html);
-        boolean found = mp.find();
-        Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent primary regex found=" + found);
-
-        if (!found) {
-            mp = Pattern.compile("var\\s+player_\\w+\\s*=\\s*(\\{.*?\\})(?:;|\\s*<|\\s*$)", Pattern.DOTALL).matcher(html);
-            found = mp.find();
-            Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent fallback regex found=" + found);
-        }
-
-        if (!found) {
-            Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent NO MATCH");
-            return Result.get().url("").string();
-        }
-
-        String playerStr = mp.group(1);
-        Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent matched=" + playerStr.substring(0, Math.min(200, playerStr.length())));
-
-        Matcher mu = Pattern.compile("\\\"url\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").matcher(playerStr);
-        String mediaUrl = mu.find() ? mu.group(1) : "";
-        Matcher me = Pattern.compile("\\\"encrypt\\\"\\s*:\\s*(\\d+)").matcher(playerStr);
-        int encrypt = me.find() ? Integer.parseInt(me.group(1)) : 0;
-
-        Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent raw url=" + mediaUrl + ", encrypt=" + encrypt);
-
-        if (encrypt == 1 && !TextUtils.isEmpty(mediaUrl)) {
-            mediaUrl = java.net.URLDecoder.decode(mediaUrl, "UTF-8");
-        }
-        mediaUrl = mediaUrl.replace("\\/", "/");
-
-        Logger.log("DEBUG", "[YueGuang-DEBUG] playerContent final url=" + mediaUrl);
-
-        boolean isM3u8 = mediaUrl.contains(".m3u8");
-        boolean isMp4 = mediaUrl.contains(".mp4");
-        int parse = (isM3u8 || isMp4) ? 0 : 1;
 
         HashMap<String, String> header = new HashMap<>();
-        header.put("User-Agent", Util.CHROME);
-        header.put("Referer", id);
+        header.put("Referer", playUrl);
+        header.put("Origin", getActiveSite());
 
-        return Result.get().url(mediaUrl).parse(parse).header(header).string();
+        if (!TextUtils.isEmpty(url) && (url.contains(".m3u8") || url.contains(".mp4"))) {
+            return Result.get().url(url).parse(0).header(header).string();
+        }
+
+        return Result.get().url(playUrl).parse(1).header(header).string();
     }
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        Logger.log("DEBUG", "[YueGuang-searchContent] start");
         return searchContent(key, quick, "1");
     }
 
     @Override
     public String searchContent(String key, boolean quick, String pg) throws Exception {
-        List<Vod> list = new ArrayList<>();
-        int page;
-        try {
-            page = Integer.parseInt(pg);
-        } catch (Exception e) {
-            page = 1;
-        }
+        int page = 1;
+        try { page = Integer.parseInt(pg); } catch (Exception ignored) {}
 
         String encodedKey = URLEncoder.encode(key, "UTF-8");
-        String url = SITE_URL + "/zwhssc/" + encodedKey + "-------------.html";
-
-        String html = fetch(url, SITE_URL + "/");
+        String url = getActiveSite() + "/vodsearch/" + encodedKey + "----------" + page + ".html";
+        String html = fetch(url);
         Document doc = Jsoup.parse(html);
-        List<Vod> vodList = parseVodList(doc);
+        List<Vod> list = parseVodList(doc);
 
-        boolean hasNext = doc.select(".stui-page, .page, .page-link, .pagination, .fed-page-info").size() > 0 || vodList.size() >= 24;
-        int pageCount = hasNext ? page + 1 : page;
-        int total = vodList.size();
-        int limit = vodList.size() > 0 ? vodList.size() : 24;
-
-        return Result.get().vod(vodList).page(page, pageCount, limit, total).string();
+        boolean hasNext = doc.select(".stui-page__item li").size() > 0 || list.size() >= 24;
+        return Result.get().vod(list).page(page, hasNext ? page + 1 : page, 24, list.size()).string();
     }
 
-    @Override
-    public Object[] proxy(Map<String, String> params) throws Exception {
-        String url = params.get("url");
-        if (TextUtils.isEmpty(url)) {
-            return new Object[]{404, "text/plain", new byte[0]};
-        }
-
-        Request request = new Request.Builder()
-            .url(url)
-            .header("User-Agent", Util.CHROME)
-            .header("Referer", SITE_URL)
-            .build();
-
-        try (Response response = client().newCall(request).execute()) {
-            byte[] body = response.body() != null ? response.body().bytes() : new byte[0];
-            String contentType = response.header("Content-Type", "application/octet-stream");
-            return new Object[]{response.code(), contentType, body};
-        }
-    }
-
-    @Override
-    public String action(String action) throws Exception {
-        if ("clearCookie".equals(action)) {
-            cookieStore.clear();
-            return "{" + "\"code\":200,\"msg\":\"Cookie已清除\"" + "}";
-        }
-        if ("getCookieCount".equals(action)) {
-            return "{" + "\"code\":200,\"count\":" + cookieStore.size() + "}";
-        }
-        return null;
-    }
-
-    private List<Vod> parseVodList(Document doc) throws Exception {
+    private List<Vod> parseVodList(Document doc) {
         List<Vod> list = new ArrayList<>();
-        Elements items = doc.select(".stui-vodlist__thumb");
+        HashSet<String> idSet = new HashSet<>();
 
-        if (items.isEmpty()) {
-            items = doc.select(".fed-list-pics, .myui-vodlist__thumb, .module-poster-item");
-        }
-        if (items.isEmpty()) {
-            items = doc.select("a[href*=/zwhsdt/]");
-        }
-
+        Elements items = doc.select(".stui-vodlist__box");
         for (Element item : items) {
-            String href = item.attr("href");
-            String title = item.attr("title");
-            String img = item.attr("data-original");
-            if (TextUtils.isEmpty(img)) img = item.attr("data-src");
-            if (TextUtils.isEmpty(img)) {
-                Element imgEl = item.selectFirst("img");
-                if (imgEl != null) {
-                    img = imgEl.attr("data-original");
-                    if (TextUtils.isEmpty(img)) img = imgEl.attr("src");
-                }
-            }
-            // 第二页图片在 style="background-image: url(...)" 中
-            if (TextUtils.isEmpty(img)) {
-                String style = item.attr("style");
-                if (!TextUtils.isEmpty(style)) {
-                    Matcher m = Pattern.compile("background-image\\s*:\\s*url\\(([^)]+)\\)").matcher(style);
-                    if (m.find()) {
-                        img = m.group(1).trim();
-                        if ((img.startsWith("\"") && img.endsWith("\"")) ||
-                            (img.startsWith("'") && img.endsWith("'"))) {
-                            img = img.substring(1, img.length() - 1);
-                        }
-                    }
-                }
-            }
-            Element noteEl = item.selectFirst(".pic-text, .fed-list-remarks, .module-item-note");
-            String note = noteEl != null ? noteEl.text().trim() : "";
+            Element a = item.selectFirst("a");
+            if (a == null) continue;
 
-            if (TextUtils.isEmpty(href) || TextUtils.isEmpty(title)) continue;
+            String href = abs(a.attr("href"));
+            Matcher m = ID_PATTERN.matcher(href);
+            if (!m.find()) continue;
+            String id = m.group(1);
+            if (idSet.contains(id)) continue;
 
-            Vod vod = new Vod();
-            vod.setVodId(fixUrl(href));
-            vod.setVodName(title);
-            vod.setVodPic(fixUrl(img));
-            vod.setVodRemarks(note);
-            list.add(vod);
+            String title = a.attr("title");
+            String pic = a.attr("data-original");
+            if (TextUtils.isEmpty(pic)) pic = a.selectFirst("img") != null ? a.selectFirst("img").attr("src") : "";
+            String remark = "";
+            Element note = item.selectFirst(".pic-text");
+            if (note != null) remark = note.text().trim();
+
+            idSet.add(id);
+            list.add(new Vod(id, title, abs(pic), remark));
         }
         return list;
     }
