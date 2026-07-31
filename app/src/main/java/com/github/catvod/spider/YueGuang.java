@@ -1,12 +1,11 @@
 package com.github.catvod.spider;
 
 import android.content.Context;
-import android.text.TextUtils;
-
-import com.github.catvod.bean.Class;
-import com.github.catvod.bean.Result;
-import com.github.catvod.bean.Vod;
-
+import com.github.catvod.crawler.Spider;
+import com.github.catvod.net.OkHttp;
+import com.github.catvod.utils.Util;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -15,24 +14,97 @@ import org.jsoup.select.Elements;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import okhttp3.Cookie;
+import okhttp3.CookieJar;
+import okhttp3.Dns;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
 /**
  * 月光影视 (www.shipian8.com)
- * TVBox Java Spider - 嗷呜模式升级版
- *
- * 升级内容：
- * 1. extends AowuSpider（统一基类）
- * 2. 删除自建 customClient/cookieStore/safeDns()
- * 3. 使用基类 fetch() + 动态UA + CookieJar
- * 4. ext 支持对象配置
+ * TVBox Java Spider - 播放诊断版
+ * 
+ * 在playerContent中增加详细调试输出，确认播放页返回内容
  */
-public class YueGuang extends AowuSpider {
+public class YueGuang extends Spider {
 
-    private static final Pattern ID_PATTERN = Pattern.compile("/voddetail/(\\d+)\\.html");
+    private static final String HOST = "https://www.shipian8.com";
+
+    private static final List<Cookie> cookieStore = new ArrayList<>();
+    private static OkHttpClient customClient;
+
+    public static OkHttpClient client() {
+        if (customClient == null) {
+            customClient = new OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(15, TimeUnit.SECONDS)
+                .cookieJar(new CookieJar() {
+                    @Override
+                    public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
+                        cookieStore.addAll(cookies);
+                    }
+                    @Override
+                    public List<Cookie> loadForRequest(HttpUrl url) {
+                        return cookieStore;
+                    }
+                })
+                .build();
+        }
+        return customClient;
+    }
+
+    public static Dns safeDns() {
+        return Dns.SYSTEM;
+    }
+
+    private Map<String, String> getHeader() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", Util.CHROME);
+        return headers;
+    }
+
+    private Map<String, String> getHeader(String referer) {
+        Map<String, String> headers = getHeader();
+        if (referer != null && !referer.isEmpty()) {
+            headers.put("Referer", referer);
+        }
+        return headers;
+    }
+
+    private String abs(String url) {
+        if (url == null || url.trim().isEmpty()) return "";
+        url = url.trim();
+        if (url.startsWith("http://") || url.startsWith("https://")) return url;
+        if (url.startsWith("//")) return "https:" + url;
+        return HOST + url;
+    }
+
+    private boolean isValidHtml(String html) {
+        if (html == null || html.length() < 5000) return false;
+        return html.contains("stui-vodlist") || html.contains("vodlist") || html.contains("class=\"stui-") || html.contains("player_");
+    }
+
+    private String fetchWithClient(String url, String referer) throws Exception {
+        Request request = new Request.Builder()
+            .url(url)
+            .header("User-Agent", Util.CHROME)
+            .header("Referer", referer != null ? referer : HOST + "/")
+            .build();
+
+        try (Response response = client().newCall(request).execute()) {
+            String body = response.body() != null ? response.body().string() : "";
+            return body;
+        }
+    }
 
     @Override
     public void init(Context context, String extend) throws Exception {
@@ -41,19 +113,30 @@ public class YueGuang extends AowuSpider {
 
     @Override
     public String homeContent(boolean filter) throws Exception {
-        List<Class> classes = new ArrayList<>();
-        classes.add(new Class("1", "电影"));
-        classes.add(new Class("2", "电视剧"));
-        classes.add(new Class("3", "综艺"));
-        classes.add(new Class("4", "动漫"));
-        return Result.string(classes, new ArrayList<>());
+        JSONObject result = new JSONObject();
+        JSONArray classes = new JSONArray();
+
+        classes.put(new JSONObject().put("type_id", "1").put("type_name", "电影"));
+        classes.put(new JSONObject().put("type_id", "2").put("type_name", "电视剧"));
+        classes.put(new JSONObject().put("type_id", "3").put("type_name", "综艺"));
+        classes.put(new JSONObject().put("type_id", "4").put("type_name", "动漫"));
+        classes.put(new JSONObject().put("type_id", "5").put("type_name", "短剧"));
+
+        result.put("class", classes);
+        result.put("filters", new JSONObject());
+        result.put("list", new JSONArray());
+
+        return result.toString();
     }
 
     @Override
     public String homeVideoContent() throws Exception {
-        String html = fetch(getActiveSite());
+        String html = fetchWithClient(HOST, null);
         Document doc = Jsoup.parse(html);
-        return Result.string(parseVodList(doc));
+        JSONArray list = parseVodList(doc);
+        JSONObject result = new JSONObject();
+        result.put("list", list);
+        return result.toString();
     }
 
     @Override
@@ -61,158 +144,311 @@ public class YueGuang extends AowuSpider {
         int page = 1;
         try { page = Integer.parseInt(pg); } catch (Exception ignored) {}
 
-        String url = getActiveSite() + "/vodshow/" + tid + "--------" + page + ".html";
-        String html = fetch(url);
-        Document doc = Jsoup.parse(html);
-        List<Vod> list = parseVodList(doc);
+        String url = page == 1
+            ? HOST + "/zwhstp/" + tid + ".html"
+            : HOST + "/zwhstp/" + tid + "-" + page + ".html";
 
-        boolean hasNext = doc.select(".stui-page__item li").size() > 0 || list.size() >= 24;
-        return Result.get().vod(list).page(page, hasNext ? page + 1 : page, 24, list.size() > 0 ? page * 24 + 1 : 0).string();
+        String html = fetchWithClient(url, HOST + "/");
+
+        if (!isValidHtml(html)) {
+            String homeHtml = fetchWithClient(HOST, null);
+            if (isValidHtml(homeHtml)) {
+                Document homeDoc = Jsoup.parse(homeHtml);
+                JSONArray list = parseVodList(homeDoc);
+                JSONObject result = new JSONObject();
+                result.put("page", page);
+                result.put("pagecount", page);
+                result.put("limit", 24);
+                result.put("total", list.length());
+                result.put("list", list);
+                return result.toString();
+            }
+        }
+
+        Document doc = Jsoup.parse(html);
+        JSONArray list = parseVodList(doc);
+
+        boolean hasNext = doc.select(".stui-page, .page").size() > 0;
+
+        JSONObject result = new JSONObject();
+        result.put("page", page);
+        result.put("pagecount", hasNext ? page + 1 : page);
+        result.put("limit", 24);
+        result.put("total", list.length() > 0 ? page * 24 + 1 : 0);
+        result.put("list", list);
+
+        return result.toString();
     }
 
     @Override
     public String detailContent(List<String> ids) throws Exception {
-        if (ids == null || ids.isEmpty()) return "";
-        String id = ids.get(0);
+        JSONArray list = new JSONArray();
 
-        String detailUrl = getActiveSite() + "/voddetail/" + id + ".html";
-        String html = fetch(detailUrl);
-        Document doc = Jsoup.parse(html);
+        for (String id : ids) {
+            if (id == null || id.isEmpty()) continue;
 
-        Vod vod = new Vod();
-        vod.setVodId(id);
+            String html = fetchWithClient(id, HOST + "/zwhstp/1.html");
+            Document doc = Jsoup.parse(html);
 
-        Element h1 = doc.selectFirst("h1.title");
-        if (h1 != null) vod.setVodName(h1.text().trim());
+            String vodName = "";
+            Element h1 = doc.selectFirst("h1.title");
+            if (h1 != null) vodName = h1.text().trim();
 
-        String pic = "";
-        Element img = doc.selectFirst(".stui-vodlist__thumb img");
-        if (img != null) {
-            pic = img.attr("data-original");
-            if (TextUtils.isEmpty(pic)) pic = img.attr("src");
-        }
-        vod.setVodPic(abs(pic));
-
-        // 信息
-        Elements items = doc.select(".stui-content__detail p");
-        for (Element p : items) {
-            String text = p.text();
-            if (text.contains("导演")) vod.setVodDirector(text.replace("导演：", "").trim());
-            else if (text.contains("主演")) vod.setVodActor(text.replace("主演：", "").trim());
-            else if (text.contains("类型")) vod.setTypeName(text.replace("类型：", "").trim());
-            else if (text.contains("地区")) vod.setVodArea(text.replace("地区：", "").trim());
-            else if (text.contains("年份")) vod.setVodYear(text.replace("年份：", "").trim());
-        }
-
-        // 简介
-        Element desc = doc.selectFirst(".stui-content__desc");
-        if (desc != null) vod.setVodContent(desc.text().trim());
-
-        // 播放源
-        List<String> playFroms = new ArrayList<>();
-        List<String> playUrls = new ArrayList<>();
-
-        Elements tabs = doc.select(".nav-tabs li");
-        for (int i = 0; i < tabs.size(); i++) {
-            Element tab = tabs.get(i);
-            String name = tab.selectFirst("a") != null ? tab.selectFirst("a").text().trim() : ("线路" + (i + 1));
-            playFroms.add(name);
-        }
-        if (playFroms.isEmpty()) playFroms.add("默认线路");
-
-        Elements playlists = doc.select(".stui-play__list");
-        for (int i = 0; i < playlists.size(); i++) {
-            Element playlist = playlists.get(i);
-            Elements links = playlist.select("a");
-            List<String> urls = new ArrayList<>();
-            for (Element link : links) {
-                String name = link.text().trim();
-                String href = abs(link.attr("href"));
-                if (!TextUtils.isEmpty(name) && !TextUtils.isEmpty(href)) {
-                    urls.add(name + "$" + href);
+            String vodPic = "";
+            String vodContent = "";
+            String vodYear = "";
+            Element ldScript = doc.selectFirst("script[type=application/ld+json]");
+            if (ldScript != null) {
+                String ldJson = ldScript.html();
+                Matcher m1 = Pattern.compile("\\\"thumbnailUrl\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").matcher(ldJson);
+                if (m1.find()) vodPic = m1.group(1);
+                Matcher m2 = Pattern.compile("\\\"description\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").matcher(ldJson);
+                if (m2.find()) vodContent = m2.group(1).replace("&amp;nbsp;", " ").trim();
+                Matcher m3 = Pattern.compile("\\\"uploadDate\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").matcher(ldJson);
+                if (m3.find()) {
+                    String date = m3.group(1);
+                    if (date.length() >= 4) vodYear = date.substring(0, 4);
                 }
             }
-            playUrls.add(String.join("#", urls));
+
+            String vodActor = "";
+            String vodDirector = "";
+            String vodClass = "";
+            String vodArea = "";
+
+            Element detailInfo = doc.selectFirst(".stui-content__detail");
+            if (detailInfo != null) {
+                Elements actorLinks = detailInfo.select("p.data a[href*=/zwhssc/]");
+                List<String> actors = new ArrayList<>();
+                for (Element a : actorLinks) {
+                    String name = a.text().trim();
+                    if (!name.isEmpty()) actors.add(name);
+                }
+                vodActor = String.join(",", actors);
+
+                Element dataP = detailInfo.selectFirst("p.data");
+                String dataText = dataP != null ? dataP.text() : "";
+
+                Matcher md = Pattern.compile("导演[:：]\\s*([^\\n]+)").matcher(dataText);
+                if (md.find()) vodDirector = md.group(1).trim();
+                Matcher mc = Pattern.compile("类型[:：]\\s*([^\\n]+)").matcher(dataText);
+                if (mc.find()) vodClass = mc.group(1).trim();
+                Matcher ma = Pattern.compile("地区[:：]\\s*([^\\n]+)").matcher(dataText);
+                if (ma.find()) vodArea = ma.group(1).trim();
+            }
+
+            List<String> froms = new ArrayList<>();
+            List<String> urls = new ArrayList<>();
+
+            Elements tabs = doc.select(".stui-content__playlist");
+            Elements tabNames = doc.select(".stui-pannel__head h3.title");
+
+            for (int i = 0; i < tabs.size(); i++) {
+                String sourceName = (i < tabNames.size()) ? tabNames.get(i).text().trim() : ("源" + (i + 1));
+                List<String> playLinks = new ArrayList<>();
+                Elements links = tabs.get(i).select("li a[href]");
+                for (Element a : links) {
+                    String href = a.attr("href");
+                    String epName = a.text().trim();
+                    if (!href.isEmpty() && !epName.isEmpty()) {
+                        playLinks.add(epName + "$" + abs(href));
+                    }
+                }
+                if (!playLinks.isEmpty()) {
+                    froms.add(sourceName);
+                    urls.add(String.join("#", playLinks));
+                }
+            }
+
+            JSONObject vod = new JSONObject();
+            vod.put("vod_id", id);
+            vod.put("vod_name", vodName);
+            vod.put("vod_pic", vodPic);
+            vod.put("vod_content", vodContent);
+            vod.put("vod_actor", vodActor);
+            vod.put("vod_director", vodDirector);
+            vod.put("vod_class", vodClass);
+            vod.put("vod_area", vodArea);
+            vod.put("vod_year", vodYear);
+            vod.put("vod_play_from", String.join("$$$", froms));
+            vod.put("vod_play_url", String.join("$$$", urls));
+            list.put(vod);
         }
 
-        vod.setVodPlayFrom(String.join("$$$", playFroms));
-        vod.setVodPlayUrl(String.join("$$$", playUrls));
-
-        return Result.string(vod);
+        JSONObject result = new JSONObject();
+        result.put("list", list);
+        return result.toString();
     }
 
     @Override
     public String playerContent(String flag, String id, List<String> vipFlags) throws Exception {
-        if (TextUtils.isEmpty(id)) return Result.get().url("").string();
-
-        String playUrl = id.startsWith("http") ? id : abs(id);
-        String html = fetch(playUrl);
-        Document doc = Jsoup.parse(html);
-
-        // player_aaaa 解密
-        String url = "";
-        Element script = doc.selectFirst("script:containsData(player_aaaa)");
-        if (script != null) {
-            String data = script.data();
-            Matcher m = Pattern.compile("\"url\":\"([^\"]+)\"").matcher(data);
-            if (m.find()) url = m.group(1).replace("\\/", "/");
+        if (id == null || id.isEmpty()) {
+            JSONObject r = new JSONObject();
+            r.put("parse", 1);
+            r.put("url", "http://127.0.0.1:9978/empty");
+            return r.toString();
         }
+
+        // 诊断：打印请求信息
+        System.out.println("[YueGuang-DEBUG] playerContent start, id=" + id + ", flag=" + flag);
+
+        String html = fetchWithClient(id, HOST + "/zwhsdt/1.html");
+
+        // 诊断：打印返回内容长度和前200字符
+        String preview = html != null ? (html.length() > 200 ? html.substring(0, 200) : html) : "null";
+        System.out.println("[YueGuang-DEBUG] playerContent html len=" + (html != null ? html.length() : 0) + " preview=" + preview.replace("\n", " "));
+
+        // 检查是否被拦截
+        if (!isValidHtml(html)) {
+            System.out.println("[YueGuang-DEBUG] playerContent INVALID html, returning empty");
+            JSONObject r = new JSONObject();
+            r.put("parse", 0);
+            r.put("url", "");
+            return r.toString();
+        }
+
+        // 尝试匹配 player_aaaa
+        Matcher mp = Pattern.compile("var\\s+player_\\w+\\s*=\\s*(\\{.*?\\})\\s*</script>", Pattern.DOTALL).matcher(html);
+        boolean found = mp.find();
+        System.out.println("[YueGuang-DEBUG] playerContent primary regex found=" + found);
+
+        if (!found) {
+            // 备用匹配
+            mp = Pattern.compile("var\\s+player_\\w+\\s*=\\s*(\\{.*?\\})(?:;|\\s*<|\\s*$)", Pattern.DOTALL).matcher(html);
+            found = mp.find();
+            System.out.println("[YueGuang-DEBUG] playerContent fallback regex found=" + found);
+        }
+
+        if (!found) {
+            System.out.println("[YueGuang-DEBUG] playerContent NO MATCH, returning empty");
+            JSONObject r = new JSONObject();
+            r.put("parse", 0);
+            r.put("url", "");
+            return r.toString();
+        }
+
+        String playerStr = mp.group(1);
+        System.out.println("[YueGuang-DEBUG] playerContent matched=" + playerStr.substring(0, Math.min(200, playerStr.length())));
+
+        Matcher mu = Pattern.compile("\\\"url\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").matcher(playerStr);
+        String mediaUrl = mu.find() ? mu.group(1) : "";
+        Matcher me = Pattern.compile("\\\"encrypt\\\"\\s*:\\s*(\\d+)").matcher(playerStr);
+        int encrypt = me.find() ? Integer.parseInt(me.group(1)) : 0;
+
+        System.out.println("[YueGuang-DEBUG] playerContent raw url=" + mediaUrl + ", encrypt=" + encrypt);
+
+        if (encrypt == 1 && !mediaUrl.isEmpty()) {
+            mediaUrl = java.net.URLDecoder.decode(mediaUrl, "UTF-8");
+        }
+
+        // 处理JSON转义斜杠
+        mediaUrl = mediaUrl.replace("\\/", "/");
+
+        System.out.println("[YueGuang-DEBUG] playerContent final url=" + mediaUrl);
+
+        boolean isM3u8 = mediaUrl.contains(".m3u8");
+        boolean isMp4 = mediaUrl.contains(".mp4");
+        int parse = (isM3u8 || isMp4) ? 0 : 1;
+
+        JSONObject result = new JSONObject();
+        result.put("parse", parse);
+        result.put("url", mediaUrl);
 
         HashMap<String, String> header = new HashMap<>();
-        header.put("Referer", playUrl);
-        header.put("Origin", getActiveSite());
+        header.put("User-Agent", Util.CHROME);
+        header.put("Referer", id);
+        result.put("header", new JSONObject(header).toString());
 
-        if (!TextUtils.isEmpty(url) && (url.contains(".m3u8") || url.contains(".mp4"))) {
-            return Result.get().url(url).parse(0).header(header).string();
-        }
-
-        return Result.get().url(playUrl).parse(1).header(header).string();
+        return result.toString();
     }
 
     @Override
     public String searchContent(String key, boolean quick) throws Exception {
-        return searchContent(key, quick, "1");
+        String encodedKey = URLEncoder.encode(key, "UTF-8");
+        String url = HOST + "/zwhssc/" + encodedKey + "-------------.html";
+
+        String html = fetchWithClient(url, HOST + "/");
+        Document doc = Jsoup.parse(html);
+        JSONArray list = parseVodList(doc);
+
+        boolean hasNext = doc.select(".stui-page, .page").size() > 0;
+
+        JSONObject result = new JSONObject();
+        result.put("page", 1);
+        result.put("pagecount", hasNext ? 2 : 1);
+        result.put("limit", 24);
+        result.put("total", list.length());
+        result.put("list", list);
+
+        return result.toString();
     }
 
     @Override
-    public String searchContent(String key, boolean quick, String pg) throws Exception {
-        int page = 1;
-        try { page = Integer.parseInt(pg); } catch (Exception ignored) {}
+    public Object[] proxy(Map<String, String> params) throws Exception {
+        String url = params.get("url");
+        if (url == null || url.isEmpty()) {
+            return new Object[]{404, "text/plain", new byte[0]};
+        }
 
-        String encodedKey = URLEncoder.encode(key, "UTF-8");
-        String url = getActiveSite() + "/vodsearch/" + encodedKey + "----------" + page + ".html";
-        String html = fetch(url);
-        Document doc = Jsoup.parse(html);
-        List<Vod> list = parseVodList(doc);
+        Request request = new Request.Builder()
+            .url(url)
+            .header("User-Agent", Util.CHROME)
+            .header("Referer", HOST)
+            .build();
 
-        boolean hasNext = doc.select(".stui-page__item li").size() > 0 || list.size() >= 24;
-        return Result.get().vod(list).page(page, hasNext ? page + 1 : page, 24, list.size()).string();
+        try (Response response = client().newCall(request).execute()) {
+            byte[] body = response.body() != null ? response.body().bytes() : new byte[0];
+            String contentType = response.header("Content-Type", "application/octet-stream");
+            return new Object[]{response.code(), contentType, body};
+        }
     }
 
-    private List<Vod> parseVodList(Document doc) {
-        List<Vod> list = new ArrayList<>();
-        HashSet<String> idSet = new HashSet<>();
+    @Override
+    public String action(String action) throws Exception {
+        if ("clearCookie".equals(action)) {
+            cookieStore.clear();
+            return "{" + "\"code\":200,\"msg\":\"Cookie已清除\"" + "}";
+        }
+        if ("getCookieCount".equals(action)) {
+            return "{" + "\"code\":200,\"count\":" + cookieStore.size() + "}";
+        }
+        return null;
+    }
 
-        Elements items = doc.select(".stui-vodlist__box");
+    private JSONArray parseVodList(Document doc) throws Exception {
+        JSONArray list = new JSONArray();
+        Elements items = doc.select(".stui-vodlist__thumb");
+
+        if (items.isEmpty()) {
+            items = doc.select(".fed-list-pics, .myui-vodlist__thumb, .module-poster-item");
+        }
+        if (items.isEmpty()) {
+            items = doc.select("a[href*=/zwhsdt/]");
+        }
+
         for (Element item : items) {
-            Element a = item.selectFirst("a");
-            if (a == null) continue;
+            String href = item.attr("href");
+            String title = item.attr("title");
+            String img = item.attr("data-original");
+            if (img.isEmpty()) img = item.attr("data-src");
+            if (img.isEmpty()) {
+                Element imgEl = item.selectFirst("img");
+                if (imgEl != null) {
+                    img = imgEl.attr("data-original");
+                    if (img.isEmpty()) img = imgEl.attr("src");
+                }
+            }
+            Element noteEl = item.selectFirst(".pic-text, .fed-list-remarks, .module-item-note");
+            String note = noteEl != null ? noteEl.text().trim() : "";
 
-            String href = abs(a.attr("href"));
-            Matcher m = ID_PATTERN.matcher(href);
-            if (!m.find()) continue;
-            String id = m.group(1);
-            if (idSet.contains(id)) continue;
+            if (href.isEmpty() || title.isEmpty()) continue;
 
-            String title = a.attr("title");
-            String pic = a.attr("data-original");
-            if (TextUtils.isEmpty(pic)) pic = a.selectFirst("img") != null ? a.selectFirst("img").attr("src") : "";
-            String remark = "";
-            Element note = item.selectFirst(".pic-text");
-            if (note != null) remark = note.text().trim();
-
-            idSet.add(id);
-            list.add(new Vod(id, title, abs(pic), remark));
+            JSONObject vod = new JSONObject();
+            vod.put("vod_id", abs(href));
+            vod.put("vod_name", title);
+            vod.put("vod_pic", abs(img));
+            vod.put("vod_remarks", note);
+            list.put(vod);
         }
         return list;
     }
