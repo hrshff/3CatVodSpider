@@ -124,7 +124,7 @@ public abstract class AowuSpider extends Spider {
         }
 
         // 纯 URL 字符串 → 直接作为站点配置，不尝试远程下载
-        if (jsonStr.startsWith("http") && !jsonStr.contains(""") && !jsonStr.contains("{")) {
+        if (jsonStr.startsWith("http") && !jsonStr.contains("\"") && !jsonStr.contains("{")) {
             siteConfig = new JSONObject();
             siteConfig.put("site", jsonStr);
             android.util.Log.w("AowuSpider", "parseExt: plain URL mode: " + jsonStr);
